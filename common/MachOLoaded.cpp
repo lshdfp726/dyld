@@ -383,10 +383,10 @@ intptr_t MachOLoaded::getSlide() const
     Diagnostics diag;
     __block intptr_t slide = 0;
     forEachLoadCommand(diag, ^(const load_command* cmd, bool& stop) {
-        if ( cmd->cmd == LC_SEGMENT_64 ) {
+        if ( cmd->cmd == LC_SEGMENT_64 ) { //对应的指令类型是 LC_SEGMENT_64
             const segment_command_64* seg = (segment_command_64*)cmd;
-            if ( strcmp(seg->segname, "__TEXT") == 0 ) {
-                slide = (uintptr_t)(((uint64_t)this) - seg->vmaddr);
+            if ( strcmp(seg->segname, "__TEXT") == 0 ) { //代码段
+                slide = (uintptr_t)(((uint64_t)this) - seg->vmaddr);//代码段首地址取出来
                 stop = true;
             }
         }

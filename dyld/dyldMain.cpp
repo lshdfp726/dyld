@@ -540,9 +540,11 @@ __attribute__((noinline)) static MainFunc prepare(APIs& state, const MachOAnalyz
     options.insertedDylib   = true;
     options.canBeDylib      = true;
     options.rpathStack      = &loadChainMain;
+    //遍历每个插入的动态库路径
     state.config.pathOverrides.forEachInsertedDylib(^(const char* dylibPath, bool& stop) {
         Diagnostics insertDiag;
         if ( Loader* insertedDylib = (Loader*)Loader::getLoader(insertDiag, state, dylibPath, options) ) {
+            //处理好的动态库加载对象插入到数组，下面会遍历加载
             topLevelLoaders.push_back(insertedDylib);
             state.notifyDebuggerLoad(insertedDylib);
             if ( insertedDylib->isPrebuilt )
@@ -890,6 +892,7 @@ static void handleDyldInCache(const MachOFile* dyldMF, const KernelArgs* kernArg
 #else
     if ( dyldMF->inDyldCache() ) {
         // We need to drop the additional send right we got by calling task_self_trap() via mach_init() a second time
+        //有缓存，先 删除 通过 mach_init 里面设置的端口名称来发送消息的权限
         mach_port_mod_refs(mach_task_self(), mach_task_self(), MACH_PORT_RIGHT_SEND, -1);
         // in case dyld moved, switch the process info that kernel is using
         bool    usingNewProcessInfo = false;
@@ -1007,7 +1010,7 @@ static void handleDyldInCache(const MachOFile* dyldMF, const KernelArgs* kernArg
             uint64_t cacheFSObjID;
             if ( sSyscallDelegate.hasExistingDyldCache(cacheBaseAddress, cacheFSID, cacheFSObjID) ) {
                 const DyldSharedCache* dyldCacheHeader = (DyldSharedCache*)(long)cacheBaseAddress;
-                uint64_t cacheSlide = dyldCacheHeader->slide();
+                uint64_t cacheSlide = dyldCacheHeader->slide(); //缓存偏移地址
                 if ( dyldCacheHeader->header.dyldInCacheMH != 0 ) {
                     const MachOFile* dyldInCacheMF = (MachOFile*)(long)(dyldCacheHeader->header.dyldInCacheMH + cacheSlide);
                     uuid_t           dyldInCacheUuid;
@@ -1055,9 +1058,9 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     // walk all fixups chains and rebase dyld
     // Note: withChainStarts() and fixupAllChainedFixups() cannot use any static DATA pointers as they are not rebased yet
     const MachOAnalyzer* dyldMA = getDyldMH();
-    uintptr_t            slide  = dyldMA->getSlide();
+    uintptr_t            slide  = dyldMA->getSlide(); //内部解析mach-o文件得到代码段的 VM Address
     if ( !dyldMA->inDyldCache() ) {
-        assert(dyldMA->hasChainedFixups());
+        assert(dyldMA->hasChainedFixups()); //已经在hasChainedFixups函数定义加了注释
         __block Diagnostics diag;
         dyldMA->withChainStarts(diag, 0, ^(const dyld_chained_starts_in_image* starts) {
             dyldMA->fixupAllChainedFixups(diag, starts, slide, dyld3::Array<const void*>(), nullptr);
@@ -1065,6 +1068,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
         diag.assertNoError();
 
         // make __DATA_CONST read-only (kernel maps it r/w)
+        //把segment_command_64结构体信息映射成 SegmentInfo
         dyldMA->forEachSegment(^(const MachOAnalyzer::SegmentInfo& segInfo, bool& stop) {
             if ( segInfo.readOnlyData ) {
                 const uint8_t* start = (uint8_t*)(segInfo.vmAddr + slide);
@@ -1075,9 +1079,29 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
     }
 
     // Now, we can call functions that use DATA
-    mach_init();
+    /**
+     * mach_task_self_ 设置当前进程任务的端名称
+     * _task_reply_port 设置当前进程任务的端口号
+     * vm_kernel_page_size 设置虚拟内存页大小
+     * vm_kernel_page_mask 设置掩码
+     * _init_cpu_capabilities();  初始化CPU
+     * _pthread_set_self(0); //设置线程
+     */
+    mach_init(); //mach相关源码 -> https://github.com/lshdfp726/xnu.git /XNU/libsyscall/mach/mach_init.c
 
     // set up random value for stack canary
+    /**
+     *  虚拟内存空间分布 由上至下, 高地址 -> 低地址
+     *  Kernel spance
+     *  Environment Variables : Env
+     *  Command-line arguments
+     *  stack   增长方向 向下
+     *  Heap  增长方向 向上
+     *  BSS Segment ，未初始化的全局变量和静态局部变量，初始值为0的全局变量和静态局部变量(依赖于编译器实现)
+     *  Data Segment   数据区
+     *  Text Segment 代码区
+     *  Reserved
+     */
     __guard_setup(kernArgs->findApple());
 
     // setup so that open_with_subsystem() works
@@ -1122,6 +1146,7 @@ void start(const KernelArgs* kernArgs, void* prevDyldMH)
             }
 
             // Add dyld to compact info
+            // dylyd 加入到进程快照
             if ( dyldMA->inDyldCache() && processSnapshot->sharedCache() ) {
                 processSnapshot->addSharedCacheImage((const struct mach_header *)dyldMA);
             } else {

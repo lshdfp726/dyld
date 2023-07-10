@@ -1011,13 +1011,13 @@ bool MachOFile::hasMachOBigEndianMagic() const
     return ( (this->magic == MH_CIGAM) || (this->magic == MH_CIGAM_64) );
 }
 
-
+//遍历所有的Load_Command
 void MachOFile::forEachLoadCommand(Diagnostics& diag, void (^callback)(const load_command* cmd, bool& stop)) const
 {
     bool stop = false;
     const load_command* startCmds = nullptr;
-    if ( this->magic == MH_MAGIC_64 )
-        startCmds = (load_command*)((char *)this + sizeof(mach_header_64));
+    if ( this->magic == MH_MAGIC_64 ) //arm64 mach-o文件标识
+        startCmds = (load_command*)((char *)this + sizeof(mach_header_64)); //mach_header_64结构体大小的偏移量
     else if ( this->magic == MH_MAGIC )
         startCmds = (load_command*)((char *)this + sizeof(mach_header));
     else if ( hasMachOBigEndianMagic() )
@@ -1031,10 +1031,10 @@ void MachOFile::forEachLoadCommand(Diagnostics& diag, void (^callback)(const loa
         diag.error("unknown mach-o filetype (%u)", this->filetype);
         return;
     }
-    const load_command* const cmdsEnd  = (load_command*)((char*)startCmds + this->sizeofcmds);
-    const load_command* const cmdsLast = (load_command*)((char*)startCmds + this->sizeofcmds - sizeof(load_command));
+    const load_command* const cmdsEnd  = (load_command*)((char*)startCmds + this->sizeofcmds);//对应mach_header_64 里面Size of Load Commands   字段
+    const load_command* const cmdsLast = (load_command*)((char*)startCmds + this->sizeofcmds - sizeof(load_command));//指向最后一个Load Commands 偏移地址
     const load_command*       cmd      = startCmds;
-    for (uint32_t i = 0; i < this->ncmds; ++i) {
+    for (uint32_t i = 0; i < this->ncmds; ++i) {//解析LC_开头一系列加载命令
         if ( cmd > cmdsLast ) {
             diag.error("malformed load command #%u of %u at %p with mh=%p, extends past sizeofcmds", i, this->ncmds, cmd, this);
             return;
@@ -1385,8 +1385,8 @@ void MachOFile::forEachSegment(void (^callback)(const SegmentInfo& info, bool& s
             const segment_command_64* segCmd = (segment_command_64*)cmd;
             uint64_t sizeOfSections = segCmd->vmsize;
             uint8_t p2align = 0;
-            const section_64* const sectionsStart = (section_64*)((char*)segCmd + sizeof(struct segment_command_64));
-            const section_64* const sectionsEnd   = &sectionsStart[segCmd->nsects];
+            const section_64* const sectionsStart = (section_64*)((char*)segCmd + sizeof(struct segment_command_64)); //segment 下面的section起始地址是 segCmd地址 + seg结构体大小,也是 section_64* 数组首地址
+            const section_64* const sectionsEnd   = &sectionsStart[segCmd->nsects]; //nsects => Number of Sections, 数组首地址 + 偏移个数
             for (const section_64* sect=sectionsStart; sect < sectionsEnd; ++sect) {
                 sizeOfSections = sect->addr + sect->size - segCmd->vmaddr;
                 if ( sect->align > p2align )
@@ -1399,7 +1399,7 @@ void MachOFile::forEachSegment(void (^callback)(const SegmentInfo& info, bool& s
             info.vmSize            = segCmd->vmsize;
             info.sizeOfSections    = sizeOfSections;
             info.segName           = segCmd->segname;
-            info.loadCommandOffset = (uint32_t)((uint8_t*)segCmd - (uint8_t*)this);
+            info.loadCommandOffset = (uint32_t)((uint8_t*)segCmd - (uint8_t*)this); //segcmd 的地址减去文件地址
             info.protections       = segCmd->initprot;
             info.textRelocs        = false;
             info.readOnlyData      = ((segCmd->flags & SG_READ_ONLY) != 0);
@@ -2363,6 +2363,7 @@ bool MachOFile::allowsAlternatePlatform() const
     return result;
 }
 
+//含有动态链接库 重定向地址、弱引用绑定、懒加载绑定、开放函数等的偏移值等信息  LC_DYLD_INFO_ONLY 中包含
 bool MachOFile::hasChainedFixups() const
 {
 #if SUPPORT_ARCH_arm64e
